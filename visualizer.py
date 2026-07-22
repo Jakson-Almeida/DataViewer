@@ -162,7 +162,8 @@ class H5Visualizer(QMainWindow):
             item = iterator.value()
             if item.checkState(0) == Qt.Checked:
                 caminho = item.data(0, Qt.UserRole)
-                if caminho.count('/') == 3: 
+                # Amostra: /experimento/amostra (2 '/'); datasets têm 3
+                if caminho and caminho.count('/') == 2:
                     selecionados.append(caminho)
             iterator += 1
             
@@ -187,7 +188,7 @@ class H5Visualizer(QMainWindow):
         self.table.setRowCount(0)
         self.table.setRowCount(len(df))
         
-        colunas_metadados = ['data', 'identificador', 'mensurando', 'amostra_id', 'valor_referencia', 'Timestamp']
+        colunas_metadados = ['data', 'identificador', 'mensurando', 'amostra_id', 'valor_referencia', 'info_amostra']
         for i, row in df.iterrows():
             for j, col_name in enumerate(colunas_metadados):
                 if col_name in df.columns:
