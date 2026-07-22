@@ -89,6 +89,10 @@ class H5Visualizer(QMainWindow):
         self.cb_color = QComboBox()
         self.cb_color.currentIndexChanged.connect(self.atualizar_grafico)
         controls_layout.addWidget(self.cb_color)
+
+        self.btn_exportar = QPushButton("Exportar gráfico")
+        self.btn_exportar.clicked.connect(self.exportar_grafico)
+        controls_layout.addWidget(self.btn_exportar)
         
         right_layout.addLayout(controls_layout)
         
@@ -256,6 +260,42 @@ class H5Visualizer(QMainWindow):
             
         self.fig.tight_layout()
         self.canvas.draw()
+
+    def exportar_grafico(self):
+        """Salva o gráfico atualmente exibido em arquivo de imagem."""
+        if self.df_atual is None or self.df_atual.empty:
+            QMessageBox.warning(self, "Aviso", "Não há gráfico para exportar. Processe dados primeiro.")
+            return
+
+        x_axis = self.cb_x.currentText() or "x"
+        y_axis = self.cb_y.currentText() or "y"
+        nome_sugerido = f"{y_axis}_vs_{x_axis}.png"
+
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Exportar gráfico",
+            nome_sugerido,
+            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg);;JPEG (*.jpg)",
+        )
+        if not file_path:
+            return
+
+        # Garante extensão se o usuário não digitou uma
+        extensoes = {
+            "PNG (*.png)": ".png",
+            "PDF (*.pdf)": ".pdf",
+            "SVG (*.svg)": ".svg",
+            "JPEG (*.jpg)": ".jpg",
+        }
+        ext = extensoes.get(selected_filter, ".png")
+        if not file_path.lower().endswith((".png", ".pdf", ".svg", ".jpg", ".jpeg")):
+            file_path += ext
+
+        try:
+            self.fig.savefig(file_path, dpi=150, bbox_inches="tight")
+            QMessageBox.information(self, "Sucesso", f"Gráfico salvo em:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao exportar o gráfico:\n{e}")
 
 
 if __name__ == "__main__":
