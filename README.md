@@ -25,7 +25,7 @@ python visualizer.py
 ```
 
 1. Clique em **Abrir Arquivo .h5** e selecione o arquivo.
-2. Clique em um sensor ou experimento na árvore para ver os **Metadados** no painel inferior esquerdo.
+2. Ao abrir o arquivo, o painel **Metadados** mostra nome, caminho e data de modificação; ao clicar em um sensor/experimento/amostra, exibe os attrs do nó.
 3. Marque sensores, experimentos ou amostras na árvore (a seleção propaga aos filhos).
 4. Clique em **Processar Selecionados** — só grupos que contêm datasets (nível amostra) são processados.
 5. Ajuste os eixos **X**, **Y**, **Cor** e o **Tipo** de gráfico (Linha, Dispersão, Barras).

@@ -1,14 +1,16 @@
 import sys
 import json
+from pathlib import Path
+from datetime import datetime
 import h5py
 import pandas as pd
 import numpy as np
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont, QKeySequence
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QTreeWidgetItem, 
                              QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QFileDialog, 
                              QTreeWidgetItemIterator, QMessageBox, QTableWidget, QTableWidgetItem, 
-                             QSplitter, QComboBox, QLabel, QCheckBox, QTextEdit)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
+                             QSplitter, QComboBox, QLabel, QCheckBox, QTextEdit, QShortcut)
 
 # Importações do Matplotlib para embutir o gráfico no PyQt5
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -55,6 +57,10 @@ class H5Visualizer(QMainWindow):
         self.tree.setHeaderLabels(["Estrutura do HDF5"])
         self.tree.itemChanged.connect(self.handle_item_changed)
         self.tree.itemSelectionChanged.connect(self.atualizar_metadados)
+        self.tree.setFocusPolicy(Qt.StrongFocus)
+        esc_arvore = QShortcut(QKeySequence(Qt.Key_Escape), self.tree)
+        esc_arvore.setContext(Qt.WidgetWithChildrenShortcut)
+        esc_arvore.activated.connect(self.limpar_selecao_arvore)
         left_splitter.addWidget(self.tree)
 
         # Painel de metadados do nó selecionado
@@ -64,7 +70,7 @@ class H5Visualizer(QMainWindow):
         meta_layout.addWidget(QLabel("Metadados"))
         self.meta_view = QTextEdit()
         self.meta_view.setReadOnly(True)
-        self.meta_view.setPlaceholderText("Selecione um sensor, experimento ou amostra na árvore.")
+        self.meta_view.setPlaceholderText("Abra um arquivo .h5 para ver informações do arquivo.")
         font = QFont("Consolas", 9)
         if not font.exactMatch():
             font = QFont("Courier New", 9)
@@ -157,6 +163,10 @@ class H5Visualizer(QMainWindow):
         self.caminho_atual = None
         self.df_atual = None # Variável para guardar o dataframe para repintar o gráfico
 
+    def limpar_selecao_arvore(self):
+        """Remove a seleção da árvore (Esc) e volta a info do arquivo nos metadados."""
+        self.tree.clearSelection()
+
     def handle_item_changed(self, item, column):
         self.tree.blockSignals(True)
         state = item.checkState(0)
@@ -174,8 +184,8 @@ class H5Visualizer(QMainWindow):
         if file_path:
             self.caminho_atual = file_path
             self.tree.clear()
-            self.meta_view.clear()
             self.popular_tree(file_path)
+            self.exibir_info_arquivo()
 
     def popular_tree(self, path):
         with h5py.File(path, 'r') as f:
@@ -191,6 +201,40 @@ class H5Visualizer(QMainWindow):
                         add_nodes(item, obj)
             
             add_nodes(self.tree.invisibleRootItem(), f)
+
+    def exibir_info_arquivo(self):
+        """Mostra nome, caminho e data de modificação do HDF5 carregado."""
+        if not self.caminho_atual:
+            self.meta_view.clear()
+            return
+
+        path = Path(self.caminho_atual)
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime)
+            data_mod = mtime.strftime("%d/%m/%Y %H:%M:%S")
+            tamanho = path.stat().st_size
+            if tamanho >= 1_048_576:
+                tam_txt = f"{tamanho / 1_048_576:.2f} MB"
+            elif tamanho >= 1024:
+                tam_txt = f"{tamanho / 1024:.1f} KB"
+            else:
+                tam_txt = f"{tamanho} bytes"
+        except OSError as e:
+            data_mod = f"(indisponível: {e})"
+            tam_txt = "—"
+
+        texto = "\n".join([
+            "[Arquivo HDF5]",
+            "",
+            f"nome: {path.name}",
+            f"caminho: {path.resolve()}",
+            f"modificado em: {data_mod}",
+            f"tamanho: {tam_txt}",
+            "",
+            "Selecione um sensor, experimento ou amostra na árvore",
+            "para ver os metadados do nó.",
+        ])
+        self.meta_view.setPlainText(texto)
 
     @staticmethod
     def _formatar_attr(valor):
@@ -265,13 +309,16 @@ class H5Visualizer(QMainWindow):
     def atualizar_metadados(self):
         """Exibe metadados do sensor/experimento (e contexto da amostra) ao selecionar na árvore."""
         items = self.tree.selectedItems()
-        if not items or not self.caminho_atual:
+        if not self.caminho_atual:
             self.meta_view.clear()
+            return
+        if not items:
+            self.exibir_info_arquivo()
             return
 
         caminho = items[0].data(0, Qt.UserRole)
         if not caminho:
-            self.meta_view.clear()
+            self.exibir_info_arquivo()
             return
 
         try:
