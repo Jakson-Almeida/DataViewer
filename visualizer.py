@@ -5,7 +5,7 @@ import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QTreeWidgetItem, 
                              QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QFileDialog, 
                              QTreeWidgetItemIterator, QMessageBox, QTableWidget, QTableWidgetItem, 
-                             QSplitter, QComboBox, QLabel)
+                             QSplitter, QComboBox, QLabel, QCheckBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 # Importações do Matplotlib para embutir o gráfico no PyQt5
@@ -90,6 +90,17 @@ class H5Visualizer(QMainWindow):
         self.cb_color.currentIndexChanged.connect(self.atualizar_grafico)
         controls_layout.addWidget(self.cb_color)
 
+        controls_layout.addWidget(QLabel("Tipo:"))
+        self.cb_tipo = QComboBox()
+        self.cb_tipo.addItems(["Linha", "Dispersão", "Barras"])
+        self.cb_tipo.currentIndexChanged.connect(self.atualizar_grafico)
+        controls_layout.addWidget(self.cb_tipo)
+
+        self.chk_tabela = QCheckBox("Mostrar tabela")
+        self.chk_tabela.setChecked(True)
+        self.chk_tabela.toggled.connect(self.alternar_tabela)
+        controls_layout.addWidget(self.chk_tabela)
+
         self.btn_exportar = QPushButton("Exportar gráfico")
         self.btn_exportar.clicked.connect(self.exportar_grafico)
         controls_layout.addWidget(self.btn_exportar)
@@ -108,11 +119,13 @@ class H5Visualizer(QMainWindow):
         self.table.setHorizontalHeaderLabels(['Data', 'Identificador', 'Mensurando', 'Amostra ID', 'Ref', 'Info'])
         
         # Dividir o espaço da direita verticalmente entre gráfico e tabela
-        right_splitter = QSplitter(Qt.Vertical)
-        right_splitter.addWidget(self.canvas)
-        right_splitter.addWidget(self.table)
+        self.right_splitter = QSplitter(Qt.Vertical)
+        self.right_splitter.addWidget(self.canvas)
+        self.right_splitter.addWidget(self.table)
+        self.right_splitter.setSizes([450, 250])
+        self._splitter_sizes_com_tabela = [450, 250]
         
-        right_layout.addWidget(right_splitter)
+        right_layout.addWidget(self.right_splitter)
         main_splitter.addWidget(right_container)
         
         # Ajuste de proporção inicial (Painel esquerdo: 1, Painel direito: 2)
@@ -260,6 +273,7 @@ class H5Visualizer(QMainWindow):
         x_axis = self.cb_x.currentText()
         y_axis = self.cb_y.currentText()
         color_by = self.cb_color.currentText()
+        tipo = self.cb_tipo.currentText()
         
         if not x_axis or not y_axis:
             return
@@ -270,14 +284,32 @@ class H5Visualizer(QMainWindow):
         hue = None if color_by == "Nenhum" else color_by
         
         try:
-            sns.lineplot(data=self.df_atual, x=x_axis, y=y_axis, hue=hue, 
-                         errorbar="sd", err_style="bars", marker='o', ax=self.ax)
-            self.ax.set_title(f"{y_axis} vs {x_axis}")
+            plot_kwargs = dict(data=self.df_atual, x=x_axis, y=y_axis, hue=hue, ax=self.ax)
+            if tipo == "Dispersão":
+                sns.scatterplot(**plot_kwargs)
+            elif tipo == "Barras":
+                sns.barplot(**plot_kwargs, errorbar="sd")
+            else:
+                sns.lineplot(**plot_kwargs, errorbar="sd", err_style="bars", marker='o')
+            self.ax.set_title(f"{y_axis} vs {x_axis} ({tipo})")
         except Exception as e:
             self.ax.set_title(f"Aviso: Não foi possível plotar ({str(e)})")
             
         self.fig.tight_layout()
         self.canvas.draw()
+
+    def alternar_tabela(self, visivel):
+        """Exibe ou oculta a tabela abaixo do gráfico."""
+        if visivel:
+            self.table.show()
+            self.right_splitter.setSizes(self._splitter_sizes_com_tabela)
+        else:
+            sizes = self.right_splitter.sizes()
+            if sizes[1] > 0:
+                self._splitter_sizes_com_tabela = sizes
+            self.table.hide()
+            total = sum(self.right_splitter.sizes()) or sum(self._splitter_sizes_com_tabela)
+            self.right_splitter.setSizes([total, 0])
 
     def exportar_grafico(self):
         """Salva o gráfico atualmente exibido em arquivo de imagem."""
