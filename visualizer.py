@@ -1,12 +1,14 @@
 import sys
+import json
 import h5py
 import pandas as pd
 import numpy as np
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QTreeWidgetItem, 
                              QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QFileDialog, 
                              QTreeWidgetItemIterator, QMessageBox, QTableWidget, QTableWidgetItem, 
-                             QSplitter, QComboBox, QLabel, QCheckBox)
+                             QSplitter, QComboBox, QLabel, QCheckBox, QTextEdit)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
 
 # Importações do Matplotlib para embutir o gráfico no PyQt5
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -46,11 +48,32 @@ class H5Visualizer(QMainWindow):
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         
-        # Árvore hierárquica em cima
+        left_splitter = QSplitter(Qt.Vertical)
+
+        # Árvore hierárquica
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Estrutura do HDF5"])
         self.tree.itemChanged.connect(self.handle_item_changed)
-        left_layout.addWidget(self.tree)
+        self.tree.itemSelectionChanged.connect(self.atualizar_metadados)
+        left_splitter.addWidget(self.tree)
+
+        # Painel de metadados do nó selecionado
+        meta_container = QWidget()
+        meta_layout = QVBoxLayout(meta_container)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.addWidget(QLabel("Metadados"))
+        self.meta_view = QTextEdit()
+        self.meta_view.setReadOnly(True)
+        self.meta_view.setPlaceholderText("Selecione um sensor, experimento ou amostra na árvore.")
+        font = QFont("Consolas", 9)
+        if not font.exactMatch():
+            font = QFont("Courier New", 9)
+        self.meta_view.setFont(font)
+        meta_layout.addWidget(self.meta_view)
+        left_splitter.addWidget(meta_container)
+        left_splitter.setSizes([420, 220])
+
+        left_layout.addWidget(left_splitter)
         
         # Botões embaixo e lado a lado (Layout Horizontal)
         buttons_layout = QHBoxLayout()
@@ -151,6 +174,7 @@ class H5Visualizer(QMainWindow):
         if file_path:
             self.caminho_atual = file_path
             self.tree.clear()
+            self.meta_view.clear()
             self.popular_tree(file_path)
 
     def popular_tree(self, path):
@@ -167,6 +191,136 @@ class H5Visualizer(QMainWindow):
                         add_nodes(item, obj)
             
             add_nodes(self.tree.invisibleRootItem(), f)
+
+    @staticmethod
+    def _formatar_attr(valor):
+        """Normaliza atributo HDF5 para texto legível."""
+        if isinstance(valor, bytes):
+            valor = valor.decode("utf-8", errors="replace")
+        if isinstance(valor, np.ndarray):
+            valor = valor.tolist()
+        if isinstance(valor, str):
+            try:
+                parsed = json.loads(valor)
+                return parsed
+            except (json.JSONDecodeError, TypeError):
+                return valor
+        return valor
+
+    def _texto_metadados_grupo(self, grupo, titulo, amostra_id=None):
+        linhas = [f"[{titulo}] {grupo.name}", ""]
+        if len(grupo.attrs) == 0:
+            linhas.append("(sem atributos neste grupo)")
+            return "\n".join(linhas)
+
+        attrs = {k: self._formatar_attr(grupo.attrs[k]) for k in grupo.attrs}
+
+        # Campos principais primeiro, se existirem
+        prioridade = [
+            "identificador", "sensor_id", "nome", "mensurando", "data",
+            "data_fabricacao", "objetivo", "notas", "lambda_res",
+        ]
+        usados = set()
+        for chave in prioridade:
+            if chave in attrs:
+                linhas.append(f"{chave}: {attrs[chave]}")
+                usados.add(chave)
+
+        # Mapas de amostras / referências
+        amostras = attrs.get("amostras")
+        refs = attrs.get("valores_referencia")
+        if isinstance(amostras, dict) or isinstance(refs, dict):
+            linhas.append("")
+            linhas.append("Amostras:")
+            keys = []
+            if isinstance(amostras, dict):
+                keys.extend(amostras.keys())
+            if isinstance(refs, dict):
+                keys.extend(refs.keys())
+            # ordena numericamente se possível
+            def _key(k):
+                try:
+                    return (0, int(k))
+                except (TypeError, ValueError):
+                    return (1, str(k))
+            for k in sorted(set(keys), key=_key):
+                info = amostras.get(k, "—") if isinstance(amostras, dict) else "—"
+                ref = refs.get(k, "—") if isinstance(refs, dict) else "—"
+                marca = "  ◀ selecionada" if amostra_id is not None and str(k) == str(amostra_id) else ""
+                linhas.append(f"  {k}: {info} | ref={ref}{marca}")
+            usados.update({"amostras", "valores_referencia"})
+
+        outros = [k for k in attrs if k not in usados]
+        if outros:
+            linhas.append("")
+            linhas.append("Outros atributos:")
+            for k in sorted(outros):
+                v = attrs[k]
+                if isinstance(v, (dict, list)):
+                    v = json.dumps(v, ensure_ascii=False)
+                linhas.append(f"  {k}: {v}")
+
+        return "\n".join(linhas)
+
+    def atualizar_metadados(self):
+        """Exibe metadados do sensor/experimento (e contexto da amostra) ao selecionar na árvore."""
+        items = self.tree.selectedItems()
+        if not items or not self.caminho_atual:
+            self.meta_view.clear()
+            return
+
+        caminho = items[0].data(0, Qt.UserRole)
+        if not caminho:
+            self.meta_view.clear()
+            return
+
+        try:
+            with h5py.File(self.caminho_atual, "r") as h5_file:
+                if caminho not in h5_file:
+                    self.meta_view.setPlainText("Caminho não encontrado no arquivo.")
+                    return
+
+                obj = h5_file[caminho]
+                blocos = []
+
+                # Sobe até um grupo
+                grupo = obj if isinstance(obj, h5py.Group) else obj.parent
+                amostra_id = None
+
+                # Dataset → grupo amostra
+                if isinstance(obj, h5py.Dataset):
+                    grupo = obj.parent
+                    amostra_id = grupo.name.split("/")[-1]
+                elif isinstance(grupo, h5py.Group):
+                    tem_datasets = any(isinstance(c, h5py.Dataset) for c in grupo.values())
+                    tem_attrs = len(grupo.attrs) > 0
+                    if tem_datasets and not tem_attrs:
+                        # grupo amostra sem attrs → metadados no experimento pai
+                        amostra_id = grupo.name.split("/")[-1]
+                        grupo = grupo.parent
+
+                # Experimento (ou grupo com attrs)
+                if isinstance(grupo, h5py.Group) and len(grupo.attrs) > 0:
+                    titulo = "Experimento" if "identificador" in grupo.attrs or "amostras" in grupo.attrs else "Grupo"
+                    if "sensor_id" in grupo.attrs or "nome" in grupo.attrs:
+                        titulo = "Sensor"
+                    blocos.append(self._texto_metadados_grupo(grupo, titulo, amostra_id=amostra_id))
+
+                    # Se estamos num experimento, inclui também o sensor pai
+                    pai = grupo.parent
+                    if (
+                        titulo == "Experimento"
+                        and isinstance(pai, h5py.Group)
+                        and pai.name != "/"
+                        and len(pai.attrs) > 0
+                    ):
+                        blocos.append(self._texto_metadados_grupo(pai, "Sensor"))
+                else:
+                    blocos.append(f"[{grupo.name}]\n(sem metadados neste nível)")
+
+                self.meta_view.setPlainText("\n\n".join(blocos))
+        except Exception as e:
+            self.meta_view.setPlainText(f"Erro ao ler metadados:\n{e}")
 
     def _caminhos_amostra_selecionados(self):
         """Retorna caminhos de grupos que contêm datasets (nível amostra)."""

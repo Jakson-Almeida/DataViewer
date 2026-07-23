@@ -25,11 +25,12 @@ python visualizer.py
 ```
 
 1. Clique em **Abrir Arquivo .h5** e selecione o arquivo.
-2. Marque sensores, experimentos ou amostras na árvore (a seleção propaga aos filhos).
-3. Clique em **Processar Selecionados** — só grupos que contêm datasets (nível amostra) são processados.
-4. Ajuste os eixos **X**, **Y**, **Cor** e o **Tipo** de gráfico (Linha, Dispersão, Barras).
-5. Use **Mostrar tabela** para exibir ou ocultar a prévia de dados abaixo do gráfico.
-6. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
+2. Clique em um sensor ou experimento na árvore para ver os **Metadados** no painel inferior esquerdo.
+3. Marque sensores, experimentos ou amostras na árvore (a seleção propaga aos filhos).
+4. Clique em **Processar Selecionados** — só grupos que contêm datasets (nível amostra) são processados.
+5. Ajuste os eixos **X**, **Y**, **Cor** e o **Tipo** de gráfico (Linha, Dispersão, Barras).
+6. Use **Mostrar tabela** para exibir ou ocultar a prévia de dados abaixo do gráfico.
+7. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
 
 O processamento roda em thread separada (`DataWorker`) para não travar a interface.
 
