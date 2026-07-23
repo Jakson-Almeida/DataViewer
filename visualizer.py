@@ -155,21 +155,39 @@ class H5Visualizer(QMainWindow):
             
             add_nodes(self.tree.invisibleRootItem(), f)
 
-    def iniciar_analise(self):
-        if not self.caminho_atual:
-            QMessageBox.warning(self, "Aviso", "Abra um arquivo HDF5 primeiro.")
-            return
-
-        selecionados = []
+    def _caminhos_amostra_selecionados(self):
+        """Retorna caminhos de grupos que contêm datasets (nível amostra)."""
+        candidatos = []
         iterator = QTreeWidgetItemIterator(self.tree)
         while iterator.value():
             item = iterator.value()
             if item.checkState(0) == Qt.Checked:
                 caminho = item.data(0, Qt.UserRole)
-                # Amostra: /experimento/amostra (2 '/'); datasets têm 3
-                if caminho and caminho.count('/') == 2:
-                    selecionados.append(caminho)
+                if caminho:
+                    candidatos.append(caminho)
             iterator += 1
+
+        if not candidatos:
+            return []
+
+        selecionados = []
+        with h5py.File(self.caminho_atual, 'r') as h5_file:
+            for caminho in candidatos:
+                if caminho not in h5_file:
+                    continue
+                obj = h5_file[caminho]
+                if isinstance(obj, h5py.Group) and any(
+                    isinstance(child, h5py.Dataset) for child in obj.values()
+                ):
+                    selecionados.append(caminho)
+        return selecionados
+
+    def iniciar_analise(self):
+        if not self.caminho_atual:
+            QMessageBox.warning(self, "Aviso", "Abra um arquivo HDF5 primeiro.")
+            return
+
+        selecionados = self._caminhos_amostra_selecionados()
             
         if not selecionados:
             QMessageBox.warning(self, "Aviso", "Selecione pelo menos um grupo de Amostra.")

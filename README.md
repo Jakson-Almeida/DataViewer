@@ -25,9 +25,10 @@ python visualizer.py
 ```
 
 1. Clique em **Abrir Arquivo .h5** e selecione o arquivo.
-2. Marque na árvore os grupos de amostra desejados (caminho `/experimento/amostra`).
-3. Clique em **Processar Selecionados**.
+2. Marque sensores, experimentos ou amostras na árvore (a seleção propaga aos filhos).
+3. Clique em **Processar Selecionados** — só grupos que contêm datasets (nível amostra) são processados.
 4. Ajuste os eixos **X**, **Y** e **Cor** nos comboboxes para atualizar o gráfico.
+5. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
 
 O processamento roda em thread separada (`DataWorker`) para não travar a interface.
 
@@ -35,13 +36,16 @@ O processamento roda em thread separada (`DataWorker`) para não travar a interf
 
 ```
 /
-└── experimento_XX/          # atributos: data, identificador, mensurando,
-    │                        # amostras (JSON), valores_referencia (JSON)
-    ├── amostra_A/
-    │   └── datasets...      # séries temporais / espectros (h5py.Dataset)
-    └── amostra_B/
-        └── datasets...
+└── SENSOR_ID/                 # attrs do sensor (opcional)
+    └── EXP_ID/                # attrs: data, identificador, mensurando,
+        │                      # amostras (JSON), valores_referencia (JSON)
+        ├── 1/                 # amostra
+        │   └── datasets...    # Timestamps, resonant_wl_*, etc.
+        └── 2/
+            └── datasets...
 ```
+
+Também funciona o layout mais simples `/experimento/amostra`. Em ambos os casos, uma **amostra** é um grupo que contém um ou mais `h5py.Dataset`.
 
 Atributos do grupo de experimento:
 
@@ -55,8 +59,8 @@ Atributos do grupo de experimento:
 from dataframe_manager import hdf5_2_df
 
 df = hdf5_2_df(
-    'data/medidas.h5',
-    ['/experimento_01/amostra_A', '/experimento_01/amostra_B']
+    'test_data/data_wl.h5',
+    ['/INT_NH3_001/EXP_1/1', '/INT_NH3_001/EXP_1/7']
 )
 ```
 
