@@ -12,12 +12,19 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QTreeWidget
                              QTreeWidgetItemIterator, QMessageBox, QTableWidget, QTableWidgetItem, 
                              QSplitter, QComboBox, QLabel, QCheckBox, QTextEdit, QShortcut,
                              QDialog, QDialogButtonBox, QListWidget, QListWidgetItem, QFormLayout,
-                             QGroupBox, QAbstractItemView)
+                             QGroupBox, QAbstractItemView, QLineEdit)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import seaborn as sns
 from dataframe_manager import hdf5_2_df
 from tara import PROTOCOLOS, aplicar_tara, listar_amostras_unicas, remover_colunas_rel
+from derivadas import (
+    OPERACOES,
+    aplicar_variaveis,
+    colunas_numericas,
+    expressao,
+    validar_nome,
+)
 
 
 class TaraDialog(QDialog):
@@ -107,6 +114,136 @@ class TaraDialog(QDialog):
         }
 
 
+class DerivadasDialog(QDialog):
+    """Modal para criar variáveis derivadas (A ±×÷ B)."""
+
+    def __init__(self, df, definicoes=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Variáveis derivadas")
+        self.resize(560, 420)
+        self.setModal(True)
+        self.definicoes = [dict(d) for d in (definicoes or [])]
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "Crie novas colunas a partir de operações básicas entre variáveis existentes.\n"
+            "Ex.: resonant_wl_diff = resonant_wl_1 − resonant_wl_2"
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.ed_nome = QLineEdit()
+        self.ed_nome.setPlaceholderText("ex.: resonant_wl_diff")
+        form.addRow("Nome:", self.ed_nome)
+
+        cols = colunas_numericas(df)
+        self.cb_a = QComboBox()
+        self.cb_a.addItems(cols)
+        self.cb_op = QComboBox()
+        for op, label in OPERACOES.items():
+            self.cb_op.addItem(f"{op}  {label}", op)
+        # default diferença
+        idx_sub = self.cb_op.findData("-")
+        if idx_sub >= 0:
+            self.cb_op.setCurrentIndex(idx_sub)
+        self.cb_b = QComboBox()
+        self.cb_b.addItems(cols)
+
+        # defaults úteis
+        if "resonant_wl_1" in cols:
+            self.cb_a.setCurrentText("resonant_wl_1")
+        if "resonant_wl_2" in cols:
+            self.cb_b.setCurrentText("resonant_wl_2")
+
+        row_expr = QHBoxLayout()
+        row_expr.addWidget(self.cb_a, 2)
+        row_expr.addWidget(self.cb_op, 2)
+        row_expr.addWidget(self.cb_b, 2)
+        form.addRow("Expressão:", row_expr)
+
+        self.lbl_preview = QLabel("")
+        self.lbl_preview.setStyleSheet("color: gray;")
+        form.addRow("Prévia:", self.lbl_preview)
+        layout.addLayout(form)
+
+        for w in (self.ed_nome, self.cb_a, self.cb_op, self.cb_b):
+            if hasattr(w, "currentIndexChanged"):
+                w.currentIndexChanged.connect(self._atualizar_preview)
+            if hasattr(w, "textChanged"):
+                w.textChanged.connect(self._atualizar_preview)
+
+        btn_row = QHBoxLayout()
+        self.btn_add = QPushButton("Adicionar")
+        self.btn_add.clicked.connect(self._adicionar)
+        self.btn_del = QPushButton("Remover selecionada")
+        self.btn_del.clicked.connect(self._remover)
+        btn_row.addWidget(self.btn_add)
+        btn_row.addWidget(self.btn_del)
+        layout.addLayout(btn_row)
+
+        self.lista = QListWidget()
+        layout.addWidget(self.lista)
+        self._popular_lista()
+        self._atualizar_preview()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _atualizar_preview(self):
+        nome = self.ed_nome.text().strip() or "<nome>"
+        a = self.cb_a.currentText() or "A"
+        op = self.cb_op.currentData() or "-"
+        b = self.cb_b.currentText() or "B"
+        self.lbl_preview.setText(f"{nome} = {expressao(a, op, b)}")
+
+    def _popular_lista(self):
+        self.lista.clear()
+        for d in self.definicoes:
+            texto = f"{d['nome']} = {expressao(d['a'], d['op'], d['b'])}"
+            item = QListWidgetItem(texto)
+            item.setData(Qt.UserRole, d["nome"])
+            self.lista.addItem(item)
+
+    def _adicionar(self):
+        nome = self.ed_nome.text().strip()
+        erro = validar_nome(nome)
+        if erro:
+            QMessageBox.warning(self, "Nome inválido", erro)
+            return
+        a = self.cb_a.currentText()
+        b = self.cb_b.currentText()
+        op = self.cb_op.currentData()
+        if not a or not b:
+            QMessageBox.warning(self, "Aviso", "Selecione as duas colunas da expressão.")
+            return
+        if a == b and op == "/":
+            QMessageBox.warning(self, "Aviso", "Divisão de uma coluna por ela mesma não é útil.")
+            return
+        # substitui se já existir o mesmo nome
+        self.definicoes = [d for d in self.definicoes if d["nome"] != nome]
+        self.definicoes.append({"nome": nome, "a": a, "op": op, "b": b})
+        # Permite encadear (usar a nova variável em outra expressão na mesma sessão)
+        if self.cb_a.findText(nome) < 0:
+            self.cb_a.addItem(nome)
+            self.cb_b.addItem(nome)
+        self._popular_lista()
+        self.ed_nome.clear()
+
+    def _remover(self):
+        item = self.lista.currentItem()
+        if not item:
+            return
+        nome = item.data(Qt.UserRole)
+        self.definicoes = [d for d in self.definicoes if d["nome"] != nome]
+        self._popular_lista()
+
+    def resultado(self):
+        return [dict(d) for d in self.definicoes]
+
+
 class DataWorker(QThread):
     finished = pyqtSignal(pd.DataFrame)
     error = pyqtSignal(str)
@@ -189,6 +326,12 @@ class H5Visualizer(QMainWindow):
         self.btn_tara.clicked.connect(self.abrir_dialogo_tara)
         left_layout.addWidget(self.btn_tara)
 
+        self.btn_derivadas = QPushButton("Variáveis derivadas…")
+        self.btn_derivadas.setEnabled(False)
+        self.btn_derivadas.setToolTip("Cria colunas novas com operações básicas (ex.: wl_1 − wl_2).")
+        self.btn_derivadas.clicked.connect(self.abrir_dialogo_derivadas)
+        left_layout.addWidget(self.btn_derivadas)
+
         main_splitter.addWidget(left_container)
         
         # ==========================================
@@ -258,9 +401,10 @@ class H5Visualizer(QMainWindow):
         
         self.caminho_atual = None
         self.df_bruto = None  # DataFrame original pós-processamento
-        self.df_atual = None  # DataFrame de trabalho (pode incluir rel_*)
+        self.df_atual = None  # DataFrame de trabalho (pode incluir rel_* e derivadas)
         self._tara_protocolo = "agua_anterior"
         self._tara_filtro = "água di"
+        self.variaveis_derivadas = []
 
     def limpar_selecao_arvore(self):
         """Remove a seleção da árvore (Esc) e volta a info do arquivo nos metadados."""
@@ -285,7 +429,9 @@ class H5Visualizer(QMainWindow):
             self.tree.clear()
             self.df_bruto = None
             self.df_atual = None
+            self.variaveis_derivadas = []
             self.btn_tara.setEnabled(False)
+            self.btn_derivadas.setEnabled(False)
             self.popular_tree(file_path)
             self.exibir_info_arquivo()
 
@@ -521,12 +667,14 @@ class H5Visualizer(QMainWindow):
             
         self.df_bruto = df.copy()
         self.df_atual = df.copy()
+        self.variaveis_derivadas = []
         self.btn_tara.setEnabled(True)
+        self.btn_derivadas.setEnabled(True)
         self._atualizar_tabela_e_eixos(preferir_rel=False)
         
         QMessageBox.information(self, "Sucesso", f"DataFrame carregado com {len(df)} registros e renderizado com sucesso!")
 
-    def _atualizar_tabela_e_eixos(self, preferir_rel=False):
+    def _atualizar_tabela_e_eixos(self, preferir_rel=False, preferir_y=None):
         """Atualiza tabela, comboboxes e gráfico a partir de df_atual."""
         df = self.df_atual
         if df is None or df.empty:
@@ -559,7 +707,9 @@ class H5Visualizer(QMainWindow):
         self.cb_color.addItems(colunas)
 
         # Defaults / preservação
-        if preferir_rel and 'rel_resonant_wl_1' in colunas:
+        if preferir_y and preferir_y in colunas:
+            self.cb_y.setCurrentText(preferir_y)
+        elif preferir_rel and 'rel_resonant_wl_1' in colunas:
             self.cb_y.setCurrentText('rel_resonant_wl_1')
         elif y_prev in colunas:
             self.cb_y.setCurrentText(y_prev)
@@ -582,6 +732,12 @@ class H5Visualizer(QMainWindow):
         
         self.atualizar_grafico()
 
+    def _reaplicar_derivadas(self):
+        """Reaplica as definições salvas sobre df_atual (após tara ou edição)."""
+        if self.df_atual is None or not self.variaveis_derivadas:
+            return
+        self.df_atual = aplicar_variaveis(self.df_atual, self.variaveis_derivadas)
+
     def abrir_dialogo_tara(self):
         if self.df_bruto is None or self.df_bruto.empty:
             QMessageBox.warning(self, "Aviso", "Processe dados antes de configurar a tara.")
@@ -599,6 +755,7 @@ class H5Visualizer(QMainWindow):
         cfg = dlg.configuracao()
         if cfg["remover"]:
             self.df_atual = remover_colunas_rel(self.df_bruto.copy())
+            self._reaplicar_derivadas()
             self._atualizar_tabela_e_eixos(preferir_rel=False)
             QMessageBox.information(self, "Tara", "Colunas rel_* removidas. Dados originais restaurados.")
             return
@@ -614,6 +771,7 @@ class H5Visualizer(QMainWindow):
                 filtro_agua=cfg["filtro_agua"],
                 amostras_manuais=cfg["amostras_manuais"],
             )
+            self._reaplicar_derivadas()
             self._tara_protocolo = cfg["protocolo"]
             self._tara_filtro = cfg["filtro_agua"]
             self._atualizar_tabela_e_eixos(preferir_rel=True)
@@ -626,6 +784,29 @@ class H5Visualizer(QMainWindow):
             )
         except Exception as e:
             QMessageBox.critical(self, "Erro na tara", str(e))
+
+    def abrir_dialogo_derivadas(self):
+        if self.df_atual is None or self.df_atual.empty:
+            QMessageBox.warning(self, "Aviso", "Processe dados antes de criar variáveis derivadas.")
+            return
+
+        nomes_antigos = [d["nome"] for d in self.variaveis_derivadas]
+        dlg = DerivadasDialog(self.df_atual, definicoes=self.variaveis_derivadas, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        self.variaveis_derivadas = dlg.resultado()
+        self.df_atual = self.df_atual.drop(columns=nomes_antigos, errors="ignore")
+        self.df_atual = aplicar_variaveis(self.df_atual, self.variaveis_derivadas)
+
+        preferir = self.variaveis_derivadas[-1]["nome"] if self.variaveis_derivadas else None
+        self._atualizar_tabela_e_eixos(preferir_rel=False, preferir_y=preferir)
+        n = len(self.variaveis_derivadas)
+        QMessageBox.information(
+            self,
+            "Variáveis derivadas",
+            f"{n} variável(is) ativa(s). Elas aparecem nos eixos X/Y/Cor.",
+        )
 
     def atualizar_grafico(self):
         """Função chamada sempre que o usuário altera os comboboxes ou o processamento termina"""

@@ -9,6 +9,7 @@ Visualizador interativo de arquivos HDF5 do pipeline COPASA. Permite navegar a e
 | `visualizer.py` | Aplicação gráfica (PyQt5) — árvore HDF5, tabela e gráficos |
 | `dataframe_manager.py` | Extração de amostras HDF5 para `pandas.DataFrame` |
 | `tara.py` | Protocolos de tara (baseline) e colunas `rel_*` |
+| `derivadas.py` | Variáveis derivadas (operações básicas entre colunas) |
 
 ## Requisitos
 
@@ -32,7 +33,8 @@ python visualizer.py
 5. Ajuste os eixos **X**, **Y**, **Cor** e o **Tipo** de gráfico (Linha, Dispersão, Barras).
 6. Use **Mostrar tabela** para exibir ou ocultar a prévia de dados abaixo do gráfico.
 7. Use **Configurar tara…** (painel esquerdo) para abrir o modal de baseline e gerar colunas `rel_*`.
-8. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
+8. Use **Variáveis derivadas…** para criar colunas com `+ − × ÷` (ex.: `resonant_wl_diff = resonant_wl_1 − resonant_wl_2`).
+9. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
 
 ### Tara (baseline)
 
@@ -44,6 +46,10 @@ Após processar, o botão **Configurar tara…** abre um diálogo (não ocupa a 
 - **Seleção manual** — marque amostras na lista do modal
 
 Também é possível **Remover tara** e voltar aos dados brutos processados.
+
+### Variáveis derivadas
+
+O botão **Variáveis derivadas…** abre um modal para definir regras do tipo `nome = coluna_A (±×÷) coluna_B`. As colunas entram nos eixos do gráfico. Após reaplicar tara, as derivadas são recalculadas automaticamente.
 
 O processamento roda em thread separada (`DataWorker`) para não travar a interface.
 
