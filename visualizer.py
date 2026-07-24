@@ -10,13 +10,102 @@ from PyQt5.QtGui import QFont, QKeySequence
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QTreeWidget, QTreeWidgetItem, 
                              QHBoxLayout, QVBoxLayout, QPushButton, QWidget, QFileDialog, 
                              QTreeWidgetItemIterator, QMessageBox, QTableWidget, QTableWidgetItem, 
-                             QSplitter, QComboBox, QLabel, QCheckBox, QTextEdit, QShortcut)
-
-# Importações do Matplotlib para embutir o gráfico no PyQt5
+                             QSplitter, QComboBox, QLabel, QCheckBox, QTextEdit, QShortcut,
+                             QDialog, QDialogButtonBox, QListWidget, QListWidgetItem, QFormLayout,
+                             QGroupBox, QAbstractItemView)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import seaborn as sns
 from dataframe_manager import hdf5_2_df
+from tara import PROTOCOLOS, aplicar_tara, listar_amostras_unicas, remover_colunas_rel
+
+
+class TaraDialog(QDialog):
+    """Modal de configuração do protocolo de tara."""
+
+    def __init__(self, df, parent=None, protocolo_atual="agua_anterior", filtro_agua="água di"):
+        super().__init__(parent)
+        self.setWindowTitle("Configurar tara")
+        self.resize(520, 480)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+
+        intro = QLabel(
+            "Define como subtrair a baseline (tara) das features.\n"
+            "Serão criadas colunas rel_<feature> para plotagem."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        self.cb_protocolo = QComboBox()
+        for key, label in PROTOCOLOS.items():
+            self.cb_protocolo.addItem(label, key)
+        idx = self.cb_protocolo.findData(protocolo_atual)
+        if idx >= 0:
+            self.cb_protocolo.setCurrentIndex(idx)
+        self.cb_protocolo.currentIndexChanged.connect(self._atualizar_estado_manual)
+        form.addRow("Protocolo:", self.cb_protocolo)
+
+        self.ed_filtro = QComboBox()
+        self.ed_filtro.setEditable(True)
+        self.ed_filtro.addItems(["água di", "agua di", "Água DI"])
+        self.ed_filtro.setCurrentText(filtro_agua)
+        form.addRow("Filtro Água DI:", self.ed_filtro)
+        layout.addLayout(form)
+
+        grupo = QGroupBox("Amostras de tara (seleção manual)")
+        g_layout = QVBoxLayout(grupo)
+        self.lista = QListWidget()
+        self.lista.setSelectionMode(QAbstractItemView.MultiSelection)
+        amostras = listar_amostras_unicas(df)
+        for _, row in amostras.iterrows():
+            ident = row.get("identificador", "")
+            aid = row.get("amostra_id", "")
+            info = row.get("info_amostra", "")
+            ref = row.get("valor_referencia", "")
+            texto = f"{ident} / {aid}: {info} | ref={ref}"
+            item = QListWidgetItem(texto)
+            item.setData(Qt.UserRole, (str(ident), str(aid)))
+            self.lista.addItem(item)
+        g_layout.addWidget(self.lista)
+        dica = QLabel("Usado apenas no protocolo \"Seleção manual\".")
+        dica.setStyleSheet("color: gray;")
+        g_layout.addWidget(dica)
+        layout.addWidget(grupo)
+
+        buttons = QDialogButtonBox()
+        self.btn_aplicar = buttons.addButton("Aplicar tara", QDialogButtonBox.AcceptRole)
+        self.btn_remover = buttons.addButton("Remover tara", QDialogButtonBox.ActionRole)
+        self.btn_cancelar = buttons.addButton(QDialogButtonBox.Cancel)
+        self.btn_aplicar.clicked.connect(self.accept)
+        self.btn_remover.clicked.connect(self._marcar_remover)
+        self.btn_cancelar.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.remover = False
+        self._atualizar_estado_manual()
+
+    def _marcar_remover(self):
+        self.remover = True
+        self.accept()
+
+    def _atualizar_estado_manual(self):
+        manual = self.cb_protocolo.currentData() == "manual"
+        self.lista.setEnabled(manual)
+
+    def configuracao(self):
+        return {
+            "remover": self.remover,
+            "protocolo": self.cb_protocolo.currentData(),
+            "filtro_agua": self.ed_filtro.currentText().strip() or "água di",
+            "amostras_manuais": [
+                item.data(Qt.UserRole)
+                for item in self.lista.selectedItems()
+            ],
+        }
+
 
 class DataWorker(QThread):
     finished = pyqtSignal(pd.DataFrame)
@@ -91,8 +180,15 @@ class H5Visualizer(QMainWindow):
         
         buttons_layout.addWidget(self.btn_abrir)
         buttons_layout.addWidget(self.btn_analisar)
-        
         left_layout.addLayout(buttons_layout)
+
+        # Tara em linha própria: não compete com a barra do gráfico
+        self.btn_tara = QPushButton("Configurar tara…")
+        self.btn_tara.setEnabled(False)
+        self.btn_tara.setToolTip("Aplica baseline (Água DI / amostra anterior / manual) após processar dados.")
+        self.btn_tara.clicked.connect(self.abrir_dialogo_tara)
+        left_layout.addWidget(self.btn_tara)
+
         main_splitter.addWidget(left_container)
         
         # ==========================================
@@ -161,7 +257,10 @@ class H5Visualizer(QMainWindow):
         main_splitter.setSizes([400, 800])
         
         self.caminho_atual = None
-        self.df_atual = None # Variável para guardar o dataframe para repintar o gráfico
+        self.df_bruto = None  # DataFrame original pós-processamento
+        self.df_atual = None  # DataFrame de trabalho (pode incluir rel_*)
+        self._tara_protocolo = "agua_anterior"
+        self._tara_filtro = "água di"
 
     def limpar_selecao_arvore(self):
         """Remove a seleção da árvore (Esc) e volta a info do arquivo nos metadados."""
@@ -184,6 +283,9 @@ class H5Visualizer(QMainWindow):
         if file_path:
             self.caminho_atual = file_path
             self.tree.clear()
+            self.df_bruto = None
+            self.df_atual = None
+            self.btn_tara.setEnabled(False)
             self.popular_tree(file_path)
             self.exibir_info_arquivo()
 
@@ -417,10 +519,19 @@ class H5Visualizer(QMainWindow):
             QMessageBox.warning(self, "Aviso", "O DataFrame gerado está vazio.")
             return
             
-        # Salva o DataFrame na classe para ser usado pela função de atualizar_grafico
-        self.df_atual = df
-            
-        # 1. Atualizar a Tabela com metadados básicos
+        self.df_bruto = df.copy()
+        self.df_atual = df.copy()
+        self.btn_tara.setEnabled(True)
+        self._atualizar_tabela_e_eixos(preferir_rel=False)
+        
+        QMessageBox.information(self, "Sucesso", f"DataFrame carregado com {len(df)} registros e renderizado com sucesso!")
+
+    def _atualizar_tabela_e_eixos(self, preferir_rel=False):
+        """Atualiza tabela, comboboxes e gráfico a partir de df_atual."""
+        df = self.df_atual
+        if df is None or df.empty:
+            return
+
         self.table.setRowCount(0)
         self.table.setRowCount(len(df))
         
@@ -431,10 +542,9 @@ class H5Visualizer(QMainWindow):
                     val = str(row[col_name])
                     self.table.setItem(i, j, QTableWidgetItem(val))
                     
-        # 2. Configurar e popular os ComboBoxes com as colunas do DataFrame
         colunas = list(df.columns)
-        
-        # Bloqueia os sinais para não tentar plotar enquanto estamos preenchendo os dados
+        x_prev, y_prev, c_prev = self.cb_x.currentText(), self.cb_y.currentText(), self.cb_color.currentText()
+
         self.cb_x.blockSignals(True)
         self.cb_y.blockSignals(True)
         self.cb_color.blockSignals(True)
@@ -445,26 +555,77 @@ class H5Visualizer(QMainWindow):
         
         self.cb_x.addItems(colunas)
         self.cb_y.addItems(colunas)
-        self.cb_color.addItem("Nenhum") # Adicionado o caso para não colorir
+        self.cb_color.addItem("Nenhum")
         self.cb_color.addItems(colunas)
-        
-        # Seta valores padrões se eles existirem no dataframe
-        if 'valor_referencia' in colunas:
-            self.cb_x.setCurrentText('valor_referencia')
-        if 'resonant_wl_1' in colunas:
+
+        # Defaults / preservação
+        if preferir_rel and 'rel_resonant_wl_1' in colunas:
+            self.cb_y.setCurrentText('rel_resonant_wl_1')
+        elif y_prev in colunas:
+            self.cb_y.setCurrentText(y_prev)
+        elif 'resonant_wl_1' in colunas:
             self.cb_y.setCurrentText('resonant_wl_1')
-        if 'identificador' in colunas:
+
+        if x_prev in colunas:
+            self.cb_x.setCurrentText(x_prev)
+        elif 'valor_referencia' in colunas:
+            self.cb_x.setCurrentText('valor_referencia')
+
+        if c_prev in colunas or c_prev == "Nenhum":
+            self.cb_color.setCurrentText(c_prev if c_prev else "Nenhum")
+        elif 'identificador' in colunas:
             self.cb_color.setCurrentText('identificador')
             
-        # Libera os sinais
         self.cb_x.blockSignals(False)
         self.cb_y.blockSignals(False)
         self.cb_color.blockSignals(False)
         
-        # Pede para desenhar o gráfico com os valores que acabaram de ser selecionados
         self.atualizar_grafico()
-        
-        QMessageBox.information(self, "Sucesso", f"DataFrame carregado com {len(df)} registros e renderizado com sucesso!")
+
+    def abrir_dialogo_tara(self):
+        if self.df_bruto is None or self.df_bruto.empty:
+            QMessageBox.warning(self, "Aviso", "Processe dados antes de configurar a tara.")
+            return
+
+        dlg = TaraDialog(
+            self.df_bruto,
+            parent=self,
+            protocolo_atual=self._tara_protocolo,
+            filtro_agua=self._tara_filtro,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        cfg = dlg.configuracao()
+        if cfg["remover"]:
+            self.df_atual = remover_colunas_rel(self.df_bruto.copy())
+            self._atualizar_tabela_e_eixos(preferir_rel=False)
+            QMessageBox.information(self, "Tara", "Colunas rel_* removidas. Dados originais restaurados.")
+            return
+
+        if cfg["protocolo"] == "manual" and not cfg["amostras_manuais"]:
+            QMessageBox.warning(self, "Aviso", "Selecione ao menos uma amostra de tara no protocolo manual.")
+            return
+
+        try:
+            self.df_atual = aplicar_tara(
+                self.df_bruto,
+                protocolo=cfg["protocolo"],
+                filtro_agua=cfg["filtro_agua"],
+                amostras_manuais=cfg["amostras_manuais"],
+            )
+            self._tara_protocolo = cfg["protocolo"]
+            self._tara_filtro = cfg["filtro_agua"]
+            self._atualizar_tabela_e_eixos(preferir_rel=True)
+            n_rel = sum(1 for c in self.df_atual.columns if str(c).startswith("rel_"))
+            QMessageBox.information(
+                self,
+                "Tara aplicada",
+                f"Protocolo: {PROTOCOLOS[cfg['protocolo']]}\n"
+                f"{n_rel} colunas rel_* criadas. Selecione-as nos eixos para plotar.",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Erro na tara", str(e))
 
     def atualizar_grafico(self):
         """Função chamada sempre que o usuário altera os comboboxes ou o processamento termina"""

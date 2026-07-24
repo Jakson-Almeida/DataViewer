@@ -8,6 +8,7 @@ Visualizador interativo de arquivos HDF5 do pipeline COPASA. Permite navegar a e
 |---------|--------|
 | `visualizer.py` | Aplicação gráfica (PyQt5) — árvore HDF5, tabela e gráficos |
 | `dataframe_manager.py` | Extração de amostras HDF5 para `pandas.DataFrame` |
+| `tara.py` | Protocolos de tara (baseline) e colunas `rel_*` |
 
 ## Requisitos
 
@@ -30,7 +31,19 @@ python visualizer.py
 4. Clique em **Processar Selecionados** — só grupos que contêm datasets (nível amostra) são processados.
 5. Ajuste os eixos **X**, **Y**, **Cor** e o **Tipo** de gráfico (Linha, Dispersão, Barras).
 6. Use **Mostrar tabela** para exibir ou ocultar a prévia de dados abaixo do gráfico.
-7. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
+7. Use **Configurar tara…** (painel esquerdo) para abrir o modal de baseline e gerar colunas `rel_*`.
+8. Use **Exportar gráfico** para salvar PNG/PDF/SVG/JPEG.
+
+### Tara (baseline)
+
+Após processar, o botão **Configurar tara…** abre um diálogo (não ocupa a barra do gráfico) com protocolos:
+
+- **Última Água DI anterior** — recomendado para o fluxo COPASA
+- **Amostra anterior (id − 1)** — compatível com notebooks antigos
+- **Média de todas as Água DI do experimento**
+- **Seleção manual** — marque amostras na lista do modal
+
+Também é possível **Remover tara** e voltar aos dados brutos processados.
 
 O processamento roda em thread separada (`DataWorker`) para não travar a interface.
 
